@@ -1,0 +1,4 @@
+/target
+dist/
+*.html
+.DS_Store
