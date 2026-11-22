@@ -1,14 +1,12 @@
 //! Input/output adapters for CSV, JSONL/NDJSON, and Apache Parquet.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
-use arrow_array::cast::AsArray;
-use arrow_array::types::{Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt32Type, UInt64Type};
 use arrow_array::Array;
-use arrow_schema::DataType;
+use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use serde::Serialize;
 
@@ -60,6 +58,12 @@ fn read_csv(path: &Path, is_tsv: bool) -> Result<Vec<HashMap<String, String>>, S
         .iter()
         .map(|s| s.to_string())
         .collect();
+    let mut seen_headers = HashSet::with_capacity(headers.len());
+    for h in &headers {
+        if !seen_headers.insert(h.as_str()) {
+            return Err(format!("duplicate column header `{h}` in {}", path.display()));
+        }
+    }
     let mut out = Vec::new();
     for rec in rdr.records() {
         let rec = rec.map_err(|e| format!("CSV row parse error: {e}"))?;
@@ -115,37 +119,47 @@ fn read_parquet(path: &Path) -> Result<Vec<HashMap<String, String>>, String> {
     let f = File::open(path).map_err(|e| format!("failed to open Parquet {}: {e}", path.display()))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(f)
         .map_err(|e| format!("failed to read Parquet metadata: {e}"))?;
+    let schema = builder.schema().clone();
+    let mut seen = HashSet::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        if !seen.insert(field.name().as_str()) {
+            return Err(format!(
+                "duplicate Parquet column `{}` in {}",
+                field.name(),
+                path.display()
+            ));
+        }
+    }
     let reader = builder
         .build()
         .map_err(|e| format!("failed to build Parquet reader: {e}"))?;
+    let fmt_opts = FormatOptions::default();
     let mut out = Vec::new();
     for batch_res in reader {
         let batch = batch_res.map_err(|e| format!("Parquet batch error: {e}"))?;
-        let schema = batch.schema();
+        let batch_schema = batch.schema();
         let n_rows = batch.num_rows();
         let n_cols = batch.num_columns();
+        let formatters: Vec<ArrayFormatter<'_>> = (0..n_cols)
+            .map(|c| {
+                ArrayFormatter::try_new(batch.column(c).as_ref(), &fmt_opts).map_err(|e| {
+                    format!(
+                        "unsupported Parquet column `{}` ({:?}): {e}",
+                        batch_schema.field(c).name(),
+                        batch_schema.field(c).data_type()
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         for row_idx in 0..n_rows {
             let mut map = HashMap::with_capacity(n_cols);
-            for col_idx in 0..n_cols {
-                let col_name = schema.field(col_idx).name().clone();
+            for (col_idx, fmt) in formatters.iter().enumerate() {
+                let col_name = batch_schema.field(col_idx).name().clone();
                 let arr = batch.column(col_idx);
-                if arr.is_null(row_idx) {
-                    map.insert(col_name, String::new());
-                    continue;
-                }
-                let s = match arr.data_type() {
-                    DataType::Float64 => arr.as_primitive::<Float64Type>().value(row_idx).to_string(),
-                    DataType::Float32 => arr.as_primitive::<Float32Type>().value(row_idx).to_string(),
-                    DataType::Int64 => arr.as_primitive::<Int64Type>().value(row_idx).to_string(),
-                    DataType::Int32 => arr.as_primitive::<Int32Type>().value(row_idx).to_string(),
-                    DataType::Int16 => arr.as_primitive::<Int16Type>().value(row_idx).to_string(),
-                    DataType::Int8 => arr.as_primitive::<Int8Type>().value(row_idx).to_string(),
-                    DataType::UInt64 => arr.as_primitive::<UInt64Type>().value(row_idx).to_string(),
-                    DataType::UInt32 => arr.as_primitive::<UInt32Type>().value(row_idx).to_string(),
-                    DataType::Boolean => arr.as_boolean().value(row_idx).to_string(),
-                    DataType::Utf8 => arr.as_string::<i32>().value(row_idx).to_string(),
-                    DataType::LargeUtf8 => arr.as_string::<i64>().value(row_idx).to_string(),
-                    _ => String::new(),
+                let s = if arr.is_null(row_idx) {
+                    String::new()
+                } else {
+                    fmt.value(row_idx).to_string()
                 };
                 map.insert(col_name, s);
             }

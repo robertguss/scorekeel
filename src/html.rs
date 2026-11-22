@@ -8,6 +8,7 @@ fn esc(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 pub fn render_score_html(
@@ -22,8 +23,15 @@ pub fn render_score_html(
     let mean_pred = rows.iter().map(|r| r.prediction).sum::<f64>() / (n as f64);
     let mut sorted_preds: Vec<f64> = rows.iter().map(|r| r.prediction).collect();
     sorted_preds.sort_by(|a, b| a.total_cmp(b));
-    let p50 = sorted_preds[sorted_preds.len() / 2];
-    let p90 = sorted_preds[(sorted_preds.len() * 9 / 10).min(sorted_preds.len() - 1)];
+    let (p50, p90) = if sorted_preds.is_empty() {
+        (0.0, 0.0)
+    } else {
+        let last = sorted_preds.len() - 1;
+        (
+            sorted_preds[sorted_preds.len() / 2],
+            sorted_preds[(sorted_preds.len() * 9 / 10).min(last)],
+        )
+    };
 
     // Top global SHAP SVG
     let max_sh = global_shap

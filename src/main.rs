@@ -48,6 +48,11 @@ fn parse_platt(raw: Option<&str>) -> Result<Option<(f64, f64)>, String> {
         .trim()
         .parse()
         .map_err(|_| format!("invalid platt intercept `{}`", parts[1]))?;
+    if !slope.is_finite() || !intercept.is_finite() {
+        return Err(format!(
+            "--platt slope and intercept must be finite numbers, got `{s}`"
+        ));
+    }
     Ok(Some((slope, intercept)))
 }
 
@@ -147,7 +152,8 @@ fn dispatch(cli: Cli) -> Result<u8, String> {
                     let anc = anchor_col
                         .as_deref()
                         .and_then(|c| rec.get(c))
-                        .and_then(|s| s.parse::<f64>().ok());
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .filter(|v| v.is_finite());
                     let pred = m.predict_transformed(&x, platt_params, anc);
                     let id = id_col.as_deref().and_then(|c| rec.get(c).cloned());
 

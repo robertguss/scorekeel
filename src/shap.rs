@@ -1,8 +1,9 @@
 //! Exact Lundberg Path-Dependent TreeSHAP (`Algorithm 2`, Lundberg et al. 2018/2020)
 //! implemented natively in pure Rust.
 //!
-//! Computes exact Shapley values matching Python `shap.TreeExplainer` (path-dependent
-//! feature perturbation) to machine precision (~1e-6), satisfying the efficiency axiom:
+//! Uses strictly conserved bottom-up node covers, zero-cover path pruning (prevents
+//! `0.0 / 0.0 = NaN` on deep zero-weight subtrees), `average_output` scaling, and
+//! per-class tree striding for multiclass models, guaranteeing the efficiency axiom:
 //! `expected_value + sum(phi_i) == raw_margin_prediction`.
 
 use crate::lgbm::{LgbmModel, Tree};
@@ -52,9 +53,11 @@ fn unwind_path(path: &mut [PathElem], unique_depth: usize, path_index: usize) {
             next_one_portion = tmp
                 - path[i].pweight * zero_fraction * ((unique_depth - i) as f64)
                     / ((unique_depth + 1) as f64);
-        } else {
+        } else if zero_fraction != 0.0 {
             path[i].pweight = (path[i].pweight * ((unique_depth + 1) as f64))
                 / (zero_fraction * ((unique_depth - i) as f64));
+        } else {
+            path[i].pweight = 0.0;
         }
     }
 
@@ -79,7 +82,7 @@ fn unwound_path_sum(path: &[PathElem], unique_depth: usize, path_index: usize) -
             total += tmp;
             next_one_portion = path[i].pweight
                 - tmp * zero_fraction * ((unique_depth - i) as f64) / ((unique_depth + 1) as f64);
-        } else {
+        } else if zero_fraction != 0.0 {
             total += (path[i].pweight / zero_fraction)
                 / (((unique_depth - i) as f64) / ((unique_depth + 1) as f64));
         }
@@ -87,34 +90,20 @@ fn unwound_path_sum(path: &[PathElem], unique_depth: usize, path_index: usize) -
     total
 }
 
-#[inline]
-fn node_cover(tree: &Tree, node: i32) -> f64 {
-    if node < 0 {
-        let leaf = (!node) as usize;
-        tree.leaf_count.get(leaf).copied().unwrap_or(1.0).max(1e-12)
-    } else {
-        tree.internal_count
-            .get(node as usize)
-            .copied()
-            .unwrap_or(1.0)
-            .max(1e-12)
-    }
-}
-
 fn tree_expected_value(tree: &Tree) -> f64 {
     if tree.num_leaves <= 1 || tree.split_feature.is_empty() {
         return tree.leaf_value.first().copied().unwrap_or(0.0);
     }
-    let total_cover: f64 = tree.leaf_count.iter().sum();
-    if total_cover <= 0.0 {
+    let root_cover = tree.node_cover(0);
+    if root_cover <= 0.0 {
         return tree.leaf_value.iter().sum::<f64>() / (tree.leaf_value.len().max(1) as f64);
     }
     tree.leaf_value
         .iter()
-        .zip(tree.leaf_count.iter())
+        .zip(tree.leaf_cover.iter())
         .map(|(&v, &c)| v * c)
         .sum::<f64>()
-        / total_cover
+        / root_cover
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -162,9 +151,12 @@ fn tree_shap_recurse(
         (tree.right_child[idx], tree.left_child[idx])
     };
 
-    let parent_cover = node_cover(tree, node);
-    let hot_zero_fraction = node_cover(tree, hot_child) / parent_cover;
-    let cold_zero_fraction = node_cover(tree, cold_child) / parent_cover;
+    let parent_cover = tree.node_cover(node);
+    if parent_cover <= 0.0 {
+        return;
+    }
+    let hot_zero_fraction = tree.node_cover(hot_child) / parent_cover;
+    let cold_zero_fraction = tree.node_cover(cold_child) / parent_cover;
 
     let mut incoming_zero_fraction = 1.0;
     let mut incoming_one_fraction = 1.0;
@@ -178,42 +170,72 @@ fn tree_shap_recurse(
         next_depth = unique_depth - 1;
     }
 
-    tree_shap_recurse(
-        tree,
-        x,
-        hot_child,
-        next_depth + 1,
-        &path,
-        hot_zero_fraction * incoming_zero_fraction,
-        incoming_one_fraction,
-        feat as i32,
-        phi,
-    );
-    tree_shap_recurse(
-        tree,
-        x,
-        cold_child,
-        next_depth + 1,
-        &path,
-        cold_zero_fraction * incoming_zero_fraction,
-        0.0,
-        feat as i32,
-        phi,
-    );
+    let next_hot_zero = hot_zero_fraction * incoming_zero_fraction;
+    if next_hot_zero > 0.0 || incoming_one_fraction > 0.0 {
+        tree_shap_recurse(
+            tree,
+            x,
+            hot_child,
+            next_depth + 1,
+            &path,
+            next_hot_zero,
+            incoming_one_fraction,
+            feat as i32,
+            phi,
+        );
+    }
+
+    let next_cold_zero = cold_zero_fraction * incoming_zero_fraction;
+    if next_cold_zero > 0.0 {
+        tree_shap_recurse(
+            tree,
+            x,
+            cold_child,
+            next_depth + 1,
+            &path,
+            next_cold_zero,
+            0.0,
+            feat as i32,
+            phi,
+        );
+    }
 }
 
 /// Compute exact TreeSHAP values `(expected_value, phi_per_feature)` for one row.
+/// For multiclass models (`num_class > 1`), explains the winning predicted class.
 pub fn explain_row(model: &LgbmModel, x: &[f64]) -> (f64, Vec<f64>) {
     let mut phi = vec![0.0_f64; model.feature_names.len()];
     let mut expected_value = 0.0_f64;
 
-    for tree in &model.trees {
+    let target_class = if model.num_class > 1 {
+        let (best_c, _) = model.predict_multiclass_logits(x);
+        Some(best_c)
+    } else {
+        None
+    };
+
+    let mut used_trees = 0usize;
+    for (tree_idx, tree) in model.trees.iter().enumerate() {
+        if let Some(tc) = target_class
+            && tree_idx % model.num_class != tc
+        {
+            continue;
+        }
+        used_trees += 1;
         expected_value += tree_expected_value(tree);
         if tree.num_leaves <= 1 || tree.split_feature.is_empty() {
             continue;
         }
         let empty: [PathElem; 0] = [];
         tree_shap_recurse(tree, x, 0, 0, &empty, 1.0, 1.0, -1, &mut phi);
+    }
+
+    if model.average_output && used_trees > 0 {
+        let inv = 1.0 / (used_trees as f64);
+        expected_value *= inv;
+        for v in &mut phi {
+            *v *= inv;
+        }
     }
 
     (expected_value, phi)
