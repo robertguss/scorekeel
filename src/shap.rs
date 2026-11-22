@@ -32,8 +32,8 @@ fn extend_path(
     };
 
     for i in (0..unique_depth).rev() {
-        path[i + 1].pweight += one_fraction * path[i].pweight * ((i + 1) as f64)
-            / ((unique_depth + 1) as f64);
+        path[i + 1].pweight +=
+            one_fraction * path[i].pweight * ((i + 1) as f64) / ((unique_depth + 1) as f64);
         path[i].pweight = zero_fraction * path[i].pweight * ((unique_depth - i) as f64)
             / ((unique_depth + 1) as f64);
     }

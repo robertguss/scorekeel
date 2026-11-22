@@ -188,7 +188,9 @@ fn dispatch(cli: Cli) -> Result<u8, String> {
                             .feature_names
                             .iter()
                             .enumerate()
-                            .map(|(fi, fnm)| (fnm.clone(), (phi[fi] * 1_000_000.0).round() / 1_000_000.0))
+                            .map(|(fi, fnm)| {
+                                (fnm.clone(), (phi[fi] * 1_000_000.0).round() / 1_000_000.0)
+                            })
                             .collect();
                         (
                             Some((e * 1_000_000.0).round() / 1_000_000.0),
@@ -239,7 +241,11 @@ fn dispatch(cli: Cli) -> Result<u8, String> {
 
             if let Some(out_path) = &out {
                 write_scored_output(out_path, &scored)?;
-                eprintln!("wrote {} scored rows -> {}", scored.len(), out_path.display());
+                eprintln!(
+                    "wrote {} scored rows -> {}",
+                    scored.len(),
+                    out_path.display()
+                );
             }
             if let Some(hp) = &html_path {
                 let rendered = html::render_score_html(
@@ -253,8 +259,7 @@ fn dispatch(cli: Cli) -> Result<u8, String> {
                 if let Some(parent) = hp.parent()
                     && !parent.as_os_str().is_empty()
                 {
-                    fs::create_dir_all(parent)
-                        .map_err(|e| format!("failed creating dir: {e}"))?;
+                    fs::create_dir_all(parent).map_err(|e| format!("failed creating dir: {e}"))?;
                 }
                 fs::write(hp, rendered)
                     .map_err(|e| format!("failed writing {}: {e}", hp.display()))?;
@@ -301,12 +306,17 @@ fn dispatch(cli: Cli) -> Result<u8, String> {
                             .as_ref()
                             .map(|ds| {
                                 ds.iter()
-                                    .map(|d| format!("{}={} ({:+.3})", d.label, d.value, d.shap_value))
+                                    .map(|d| {
+                                        format!("{}={} ({:+.3})", d.label, d.value, d.shap_value)
+                                    })
                                     .collect::<Vec<_>>()
                                     .join(" | ")
                             })
                             .unwrap_or_default();
-                        println!("  {:<14} pred={:.4}  raw={:+.4}  {}", id_s, r.prediction, r.raw_score, drv);
+                        println!(
+                            "  {:<14} pred={:.4}  raw={:+.4}  {}",
+                            id_s, r.prediction, r.raw_score, drv
+                        );
                     }
                 }
             }

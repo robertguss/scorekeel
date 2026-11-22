@@ -34,16 +34,11 @@ pub fn render_score_html(
     };
 
     // Top global SHAP SVG
-    let max_sh = global_shap
-        .iter()
-        .map(|(_, v)| *v)
-        .fold(0.01_f64, f64::max);
+    let max_sh = global_shap.iter().map(|(_, v)| *v).fold(0.01_f64, f64::max);
     let mut shap_svg = String::new();
     let shown_sh = &global_shap[..global_shap.len().min(10)];
     let svg_h = 30 + shown_sh.len() * 32;
-    shap_svg.push_str(&format!(
-        "<svg viewBox=\"0 0 640 {svg_h}\" width=\"100%\">"
-    ));
+    shap_svg.push_str(&format!("<svg viewBox=\"0 0 640 {svg_h}\" width=\"100%\">"));
     for (idx, (feat, val)) in shown_sh.iter().enumerate() {
         let y = 20 + idx * 32;
         let w = ((val / max_sh) * 320.0).max(4.0);

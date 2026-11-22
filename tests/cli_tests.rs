@@ -162,7 +162,11 @@ fn rejects_malformed_cyclic_and_overflow_models_and_handles_empty_html_and_cover
     std::fs::write(&dup_csv, "gpa,gpa\n3.5,2.0\n").unwrap();
     Command::cargo_bin("scorekeel")
         .unwrap()
-        .args(["score", model_path.to_str().unwrap(), dup_csv.to_str().unwrap()])
+        .args([
+            "score",
+            model_path.to_str().unwrap(),
+            dup_csv.to_str().unwrap(),
+        ])
         .assert()
         .code(2);
 
@@ -188,11 +192,7 @@ fn rejects_malformed_cyclic_and_overflow_models_and_handles_empty_html_and_cover
         .join("\n");
     std::fs::write(&nocount_model, stripped).unwrap();
     let data_path = dir.path().join("rows.csv");
-    std::fs::write(
-        &data_path,
-        "id,gpa,miss_rate,program\nS2,3.5,0.10,Cert\n",
-    )
-    .unwrap();
+    std::fs::write(&data_path, "id,gpa,miss_rate,program\nS2,3.5,0.10,Cert\n").unwrap();
     let sc = Command::cargo_bin("scorekeel")
         .unwrap()
         .args([
@@ -216,7 +216,10 @@ fn rejects_malformed_cyclic_and_overflow_models_and_handles_empty_html_and_cover
         .values()
         .map(|v| v.as_f64().unwrap())
         .sum();
-    assert!(((ev + shap_sum) - raw).abs() < 1e-4, "ev={ev} + sum={shap_sum} != raw={raw}");
+    assert!(
+        ((ev + shap_sum) - raw).abs() < 1e-4,
+        "ev={ev} + sum={shap_sum} != raw={raw}"
+    );
 
     // 6. Anchor=0 with raw=0 produces 0.0 (not 1.0) + shifted pandas_categorical with constant col 0
     let reg_model = dir.path().join("reg_cat.txt");
@@ -270,7 +273,9 @@ pandas_categorical:[["U1"], ["X", "Y"]]
     // Row 0 ("X", code 0 in bitset 1 -> leaf 0 = 0.0, anchor=0 -> (0+1)*exp(0)-1 = 0.0!)
     assert!((rj["predictions"][0]["prediction"].as_f64().unwrap() - 0.0).abs() < 1e-5);
     // Row 1 ("Y", code 1 not in bitset 1 -> leaf 1 = 1.0, anchor=0 -> (0+1)*exp(1)-1 = 1.718282!)
-    assert!((rj["predictions"][1]["prediction"].as_f64().unwrap() - (1.0_f64.exp() - 1.0)).abs() < 1e-4);
+    assert!(
+        (rj["predictions"][1]["prediction"].as_f64().unwrap() - (1.0_f64.exp() - 1.0)).abs() < 1e-4
+    );
 }
 
 #[test]

@@ -34,8 +34,7 @@ pub struct ServeConfig {
 }
 
 pub fn run_server(bind: &str, cfg: ServeConfig) -> Result<(), String> {
-    let listener =
-        TcpListener::bind(bind).map_err(|e| format!("failed to bind {bind}: {e}"))?;
+    let listener = TcpListener::bind(bind).map_err(|e| format!("failed to bind {bind}: {e}"))?;
     let num_workers = std::thread::available_parallelism()
         .map(|n| n.get().clamp(4, 16))
         .unwrap_or(8);
@@ -59,17 +58,19 @@ pub fn run_server(bind: &str, cfg: ServeConfig) -> Result<(), String> {
         let cfg_c = Arc::clone(&cfg);
         std::thread::Builder::new()
             .name(format!("scorekeel-worker-{idx}"))
-            .spawn(move || loop {
-                let stream = {
-                    let Ok(guard) = rx_c.lock() else {
-                        break;
+            .spawn(move || {
+                loop {
+                    let stream = {
+                        let Ok(guard) = rx_c.lock() else {
+                            break;
+                        };
+                        match guard.recv() {
+                            Ok(s) => s,
+                            Err(_) => break,
+                        }
                     };
-                    match guard.recv() {
-                        Ok(s) => s,
-                        Err(_) => break,
-                    }
-                };
-                let _ = handle_conn(stream, &cfg_c);
+                    let _ = handle_conn(stream, &cfg_c);
+                }
             })
             .map_err(|e| format!("failed spawning worker thread: {e}"))?;
     }

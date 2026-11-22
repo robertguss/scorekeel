@@ -174,7 +174,11 @@ impl LgbmModel {
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut hasher = Sha256::new();
         hasher.update(text.as_bytes());
-        let sha256: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        let sha256: String = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
 
         let mut version = "v4".to_string();
         let mut num_class: usize = 1;
@@ -208,7 +212,8 @@ impl LgbmModel {
                 {
                     let trimmed = inner.trim();
                     if !trimmed.is_empty() {
-                        param_cat_features = Some(parse_param_categoricals(trimmed, &feature_names));
+                        param_cat_features =
+                            Some(parse_param_categoricals(trimmed, &feature_names));
                     }
                 }
                 i += 1;
@@ -225,7 +230,10 @@ impl LgbmModel {
                     .max(1);
             } else if let Some(v) = line.strip_prefix("objective=") {
                 objective_raw = v.to_string();
-            } else if line == "average_output" || line == "average_output=1" || line == "average_output=true" {
+            } else if line == "average_output"
+                || line == "average_output=1"
+                || line == "average_output=true"
+            {
                 average_output = true;
             } else if let Some(v) = line.strip_prefix("feature_names=") {
                 feature_names = v.split_whitespace().map(|s| s.to_string()).collect();
@@ -307,7 +315,9 @@ impl LgbmModel {
                         let info_with_none: Vec<usize> = feature_infos
                             .iter()
                             .enumerate()
-                            .filter(|(_, info)| !info.starts_with('[') && (info.contains(':') || *info == "none"))
+                            .filter(|(_, info)| {
+                                !info.starts_with('[') && (info.contains(':') || *info == "none")
+                            })
                             .map(|(idx, _)| idx)
                             .collect();
                         if info_with_none.len() == parsed_lists.len() {
@@ -553,7 +563,11 @@ fn parse_objective(raw: &str, num_class: usize) -> (Objective, f64) {
         Objective::Quantile
     } else if low.starts_with("poisson") || low.starts_with("gamma") || low.starts_with("tweedie") {
         Objective::ExpLink
-    } else if low.starts_with("regression") || low.starts_with("huber") || low.starts_with("l1") || low.starts_with("l2") {
+    } else if low.starts_with("regression")
+        || low.starts_with("huber")
+        || low.starts_with("l1")
+        || low.starts_with("l2")
+    {
         Objective::Regression
     } else {
         Objective::Other(raw.to_string())

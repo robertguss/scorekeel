@@ -61,7 +61,10 @@ fn read_csv(path: &Path, is_tsv: bool) -> Result<Vec<HashMap<String, String>>, S
     let mut seen_headers = HashSet::with_capacity(headers.len());
     for h in &headers {
         if !seen_headers.insert(h.as_str()) {
-            return Err(format!("duplicate column header `{h}` in {}", path.display()));
+            return Err(format!(
+                "duplicate column header `{h}` in {}",
+                path.display()
+            ));
         }
     }
     let mut out = Vec::new();
@@ -116,7 +119,8 @@ pub fn json_obj_to_map(val: &serde_json::Value) -> Result<HashMap<String, String
 }
 
 fn read_parquet(path: &Path) -> Result<Vec<HashMap<String, String>>, String> {
-    let f = File::open(path).map_err(|e| format!("failed to open Parquet {}: {e}", path.display()))?;
+    let f =
+        File::open(path).map_err(|e| format!("failed to open Parquet {}: {e}", path.display()))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(f)
         .map_err(|e| format!("failed to read Parquet metadata: {e}"))?;
     let schema = builder.schema().clone();
