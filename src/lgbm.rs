@@ -737,6 +737,9 @@ fn parse_tree_block(lines: &[&str], start: usize) -> Result<(Tree, usize), Strin
                 }
             }
         }
+        if post_order.len() != n_int || !visited_leaf.iter().all(|&v| v) {
+            return Err("invalid LightGBM tree: disconnected internal or leaf nodes".to_string());
+        }
     }
 
     // Precompute strictly conserved bottom-up node covers (`cover[parent] == cover[left] + cover[right]`)

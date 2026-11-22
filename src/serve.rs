@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
 
@@ -22,6 +22,7 @@ const MAX_TOTAL_HEADER_BYTES: usize = 32 * 1024;
 const MAX_HEADERS: usize = 64;
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
+const REQUEST_DEADLINE: Duration = Duration::from_secs(10);
 const QUEUE_CAPACITY: usize = 64;
 
 pub struct ServeConfig {
@@ -115,8 +116,32 @@ fn read_bounded_line(
     Ok(Some(buf))
 }
 
+fn apply_remaining_read_timeout(
+    reader: &BufReader<&mut TcpStream>,
+    deadline: Instant,
+) -> std::io::Result<()> {
+    let now = Instant::now();
+    if now >= deadline {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "request deadline exceeded",
+        ));
+    }
+    let rem = (deadline - now).min(IO_TIMEOUT);
+    reader.get_ref().set_read_timeout(Some(rem))
+}
+
+fn is_valid_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_graphic() && !b"()<>@,;:\\\"/[]?={}".contains(&b))
+}
+
 fn read_http_request(stream: &mut TcpStream) -> std::io::Result<ParsedRequest> {
+    let deadline = Instant::now() + REQUEST_DEADLINE;
     let mut reader = BufReader::new(stream);
+    apply_remaining_read_timeout(&reader, deadline)?;
     let request_line = match read_bounded_line(&mut reader, MAX_REQUEST_LINE_BYTES) {
         Ok(Some(l)) => l,
         Ok(None) => return Ok(ParsedRequest::Empty),
@@ -145,6 +170,7 @@ fn read_http_request(stream: &mut TcpStream) -> std::io::Result<ParsedRequest> {
     let mut total_header_bytes = request_line.len();
 
     loop {
+        apply_remaining_read_timeout(&reader, deadline)?;
         let line = match read_bounded_line(&mut reader, MAX_HEADER_LINE_BYTES) {
             Ok(Some(l)) => l,
             Ok(None) => {
@@ -178,7 +204,13 @@ fn read_http_request(stream: &mut TcpStream) -> std::io::Result<ParsedRequest> {
                 r#"{"error":"malformed header"}"#,
             ));
         };
-        let key = k.trim();
+        if !is_valid_header_name(k) {
+            return Ok(ParsedRequest::HttpError(
+                400,
+                r#"{"error":"invalid header field name"}"#,
+            ));
+        }
+        let key = k;
         let val = v.trim();
         if key.eq_ignore_ascii_case("transfer-encoding") {
             has_transfer_encoding = true;
@@ -229,8 +261,17 @@ fn read_http_request(stream: &mut TcpStream) -> std::io::Result<ParsedRequest> {
     }
 
     let mut body = vec![0u8; content_len];
-    if content_len > 0 {
-        reader.read_exact(&mut body)?;
+    let mut read_so_far = 0usize;
+    while read_so_far < content_len {
+        apply_remaining_read_timeout(&reader, deadline)?;
+        let n = reader.read(&mut body[read_so_far..])?;
+        if n == 0 {
+            return Ok(ParsedRequest::HttpError(
+                400,
+                r#"{"error":"unexpected EOF in request body"}"#,
+            ));
+        }
+        read_so_far += n;
     }
 
     Ok(ParsedRequest::Ready { method, path, body })
